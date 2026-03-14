@@ -5,6 +5,7 @@
 # ВАЖНО: percent/mask_roi считаются ТОЛЬКО после compute_percent_from_mask (не внутри unet_predict)
 
 import os
+import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -16,37 +17,61 @@ import torch
 import torch.nn as nn
 
 # ================== CONFIG ==================
-MODEL_PATH = r"unet_corneal_opacity.pt"
+def resource_path(name: str) -> str:
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, name)
+
+
+def find_model_path() -> str:
+    candidates = [
+        resource_path("unet_corneal_opacity.pt"),
+        os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "unet_corneal_opacity.pt"),
+        os.path.join(os.getcwd(), "unet_corneal_opacity.pt"),
+    ]
+
+    seen = set()
+    for path in candidates:
+        path = os.path.abspath(path)
+        if path in seen:
+            continue
+        seen.add(path)
+        if os.path.exists(path):
+            return path
+
+    return os.path.abspath(candidates[0])
+
+
+MODEL_PATH = find_model_path()
 UNET_INPUT_SIZE = 256
 
 # --- АДАПТИВНЫЙ порог ---
 # Если p95 ниже -> сеть менее уверена (часто "здоровые/блики") -> делаем порог строгим
-P95_SWITCH = 0.78
-THR_STRICT = 0.88       # строгий (здоровые/блики)
-THR_SENSITIVE = 0.68    # чувствительный (больные/слабое помутнение)
-THR_CLAMP_MIN = 0.45
+P95_SWITCH = 0.65
+THR_STRICT = 0.65       # строгий (когда сеть уверена)       # строгий (здоровые/блики)
+THR_SENSITIVE = 0.45    # чувствительный (когда сеть НЕ уверена)    # чувствительный (больные/слабое помутнение)
+THR_CLAMP_MIN = 0.25
 THR_CLAMP_MAX = 0.90
 
 OVERLAY_ALPHA = 0.45
 
 # --- Фильтр компонент (динамический) ---
-MIN_AREA_STRICT = 800
-MIN_AREA_SENSITIVE = 120
+MIN_AREA_STRICT = 200
+MIN_AREA_SENSITIVE = 60
 
 # --- Шум-флор по проценту ---
 # Если итог < этого процента -> считаем 0 и маску обнуляем (для здоровых)
-NOISE_FLOOR_PERCENT = 3.0
+NOISE_FLOOR_PERCENT = 1.0
 
 # --- Морфология ---
 OPEN_KERNEL = (3, 3)
-CLOSE_KERNEL = (5, 5)
+CLOSE_KERNEL = (3, 3)
 DILATE_KERNEL = (3, 3)
-DILATE_ITERS = 1
+DILATE_ITERS = 2
 
 # --- Вырез центра (борьба с ложняком по радужке/зрачку) ---
 # ВАЖНО: применяется ТОЛЬКО при p95 < P95_SWITCH (т.е. когда сеть не уверена)
-CENTER_CUT_ENABLE = True
-CENTER_CUT_RADIUS_STRICT = 0.30  # доля min(h,w) (0.25–0.35)
+CENTER_CUT_ENABLE = False
+CENTER_CUT_RADIUS_STRICT = 0.25  # доля min(h,w) (0.25–0.35)
 
 
 # ================= TOOLTIP =================
@@ -135,31 +160,6 @@ def compute_percent_from_mask(mask255: np.ndarray, roi_mask255: np.ndarray):
     percent = 100.0 * opacity_area / max(roi_area, 1)
     return percent, m
 
-
-def classic_mask(bgr_img: np.ndarray, roi_mask255: np.ndarray, k: float = 1.0):
-    """Классика: CLAHE + mean+k*std внутри ROI"""
-    lab = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2LAB)
-    L, _, _ = cv2.split(lab)
-
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    L_eq = clahe.apply(L)
-
-    L_roi = L_eq[roi_mask255 == 255]
-    if L_roi.size < 50:
-        return np.zeros(roi_mask255.shape, dtype=np.uint8)
-
-    mean = float(np.mean(L_roi))
-    std = float(np.std(L_roi))
-    thresh_val = float(np.clip(mean + k * std, 0, 255))
-
-    out = np.zeros_like(L_eq, dtype=np.uint8)
-    out[L_eq >= thresh_val] = 255
-    out = cv2.bitwise_and(out, roi_mask255)
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    out = cv2.morphologyEx(out, cv2.MORPH_OPEN, kernel, iterations=1)
-    out = cv2.morphologyEx(out, cv2.MORPH_CLOSE, kernel, iterations=2)
-    return out
 
 
 def keep_large_components(mask255: np.ndarray, min_area: int) -> np.ndarray:
@@ -295,7 +295,7 @@ def unet_predict_mask_255(model: nn.Module, device: torch.device, bgr: np.ndarra
 
     p95 = float(np.percentile(probs, 95))
 
-    thr = THR_STRICT if p95 < P95_SWITCH else THR_SENSITIVE
+    thr = THR_SENSITIVE if p95 < P95_SWITCH else THR_STRICT
     thr = float(np.clip(thr, THR_CLAMP_MIN, THR_CLAMP_MAX))
 
     mask_small = (probs >= thr).astype(np.uint8) * 255
@@ -315,7 +315,7 @@ def unet_predict_mask_255(model: nn.Module, device: torch.device, bgr: np.ndarra
         mask = cv2.bitwise_and(mask, roi_mask255)
 
     # Динамическая чистка компонент
-    min_area = MIN_AREA_STRICT if p95 < P95_SWITCH else MIN_AREA_SENSITIVE
+    min_area = MIN_AREA_SENSITIVE if p95 < P95_SWITCH else MIN_AREA_STRICT
     mask = keep_large_components(mask, min_area=min_area)
 
     # Морфология
@@ -500,8 +500,6 @@ class EyeComparisonApp:
         self.root.geometry("1750x960")
 
         self.single_mode = tk.BooleanVar(value=False)
-        self.use_unet = tk.BooleanVar(value=True)
-        self.k_value = tk.DoubleVar(value=1.0)
 
         self.before_pil = None
         self.after_pil = None
@@ -513,8 +511,7 @@ class EyeComparisonApp:
         self.update_mode()
 
         if self.unet_model is None:
-            messagebox.showwarning("U-Net", self.unet_status_msg + "\nБудет использоваться классический метод.")
-            self.use_unet.set(False)
+            messagebox.showwarning("U-Net", self.unet_status_msg)
 
     def create_widgets(self):
         top = ttk.Frame(self.root)
@@ -540,17 +537,8 @@ class EyeComparisonApp:
         params = ttk.LabelFrame(top, text="Настройки", padding=8)
         params.pack(side="right", padx=5)
 
-        cb_unet = ttk.Checkbutton(params, text="Использовать U-Net", variable=self.use_unet)
-        cb_unet.grid(row=0, column=0, sticky="w", columnspan=2)
-        ToolTip(cb_unet, "U-Net + адаптивный порог + динамическая чистка.\nВырез центра применяется только когда сеть не уверена.")
-
-        ttk.Button(params, text="Сброс ROI", command=self.reset_roi).grid(row=2, column=0, sticky="we", pady=(6, 0))
-        ttk.Button(params, text="Показать исходник", command=self.reset_view).grid(row=2, column=1, sticky="we", pady=(6, 0))
-
-        ttk.Label(params, text="k (только классика)").grid(row=4, column=0, sticky="w", pady=(6, 0))
-        ttk.Scale(params, from_=0.4, to=1.8, variable=self.k_value, orient="horizontal", length=160).grid(
-            row=4, column=1, padx=6, pady=(6, 0)
-        )
+        ttk.Button(params, text="Сброс ROI", command=self.reset_roi).grid(row=0, column=0, sticky="we", pady=(2, 0))
+        ttk.Button(params, text="Показать исходник", command=self.reset_view).grid(row=0, column=1, sticky="we", pady=(2, 0))
 
         main = ttk.Frame(self.root)
         main.pack(fill="both", expand=True, padx=10, pady=10)
@@ -625,26 +613,20 @@ class EyeComparisonApp:
             messagebox.showerror("Ошибка при анализе", f"{e}\n\n{traceback.format_exc()}")
 
     def _analyze_one(self, bgr: np.ndarray, roi_mask255: np.ndarray):
-        if self.use_unet.get() and self.unet_model is not None:
-            mask255, thr, p95, min_area = unet_predict_mask_255(
-                self.unet_model, self.unet_device, bgr, roi_mask255
-            )
-            percent, mask_roi = compute_percent_from_mask(mask255, roi_mask255)
+        if self.unet_model is None:
+            raise RuntimeError(self.unet_status_msg)
 
-            # шум-флор: маленькие проценты считаем нулём
-            if percent < NOISE_FLOOR_PERCENT:
-                percent = 0.0
-                mask_roi[:] = 0
+        mask255, thr, p95, min_area = unet_predict_mask_255(
+            self.unet_model, self.unet_device, bgr, roi_mask255
+        )
+        percent, mask_roi = compute_percent_from_mask(mask255, roi_mask255)
 
-            info = f"U-Net (thr={thr:.2f}, p95={p95:.2f}, min_area={min_area})"
-            return percent, mask_roi, info
-        else:
-            m = classic_mask(bgr, roi_mask255, k=float(self.k_value.get()))
-            percent, mask_roi = compute_percent_from_mask(m, roi_mask255)
-            if percent < NOISE_FLOOR_PERCENT:
-                percent = 0.0
-                mask_roi[:] = 0
-            return percent, mask_roi, "Классика"
+        if percent < NOISE_FLOOR_PERCENT:
+            percent = 0.0
+            mask_roi[:] = 0
+
+        info = f"U-Net (thr={thr:.2f}, p95={p95:.2f}, min_area={min_area})"
+        return percent, mask_roi, info
 
     def run_single(self):
         if self.before_pil is None:
@@ -707,7 +689,6 @@ class EyeComparisonApp:
         self.results_text.insert("end", f"Разница: {diff:.2f}%\n")
 
 
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = EyeComparisonApp(root)
-    root.mainloop()
+root = tk.Tk()
+app = EyeComparisonApp(root)
+root.mainloop()
