@@ -1,0 +1,15 @@
+.idea/
+**/.idea/
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+build/
+dist/
+**/build/
+**/dist/
+*.pyc
+*.pt
+*.pth
+*.h5
+data/
