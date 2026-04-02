@@ -20,16 +20,16 @@
 
 ## Структура проекта
 
-training_scripts/check_data/train_unet.py  
+scripts/train_unet.py  
 обучение модели U-Net
 
-training_scripts/check_data/predict_image.py  
+scripts/predict_image.py  
 анализ изображения
 
-training_scripts/check_data/final_prog.py  
+scriptsfinal_prog.py  
 графический интерфейс программы
 
-training_scripts/check_data/mask_script.py  
+scriptsmask_script.py  
 разметка изображений
 
 ## Датасет
