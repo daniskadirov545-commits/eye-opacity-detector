@@ -26,10 +26,10 @@ scripts/train_unet.py
 scripts/predict_image.py  
 анализ изображения
 
-scriptsfinal_prog.py  
+scripts/main.py  
 графический интерфейс программы
 
-scriptsmask_script.py  
+scripts/mask_script.py  
 разметка изображений
 
 ## Датасет
