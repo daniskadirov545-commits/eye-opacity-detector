@@ -25,7 +25,7 @@ def find_model_path() -> str:
         if os.path.exists(path):
             return path
     return os.path.abspath(candidates[0])
-# Параметры работы сети (взяты вместе с архитектрурой с открытых источников)
+# Параметры работы сети (взяты вместе с архитектрурой Unet с открытых источников)
 MODEL_PATH = find_model_path()
 UNET_INPUT_SIZE = 256  # Сеть обучена на картинках 256x256
 
@@ -216,8 +216,6 @@ class UNet(nn.Module):
         u1 = self.conv1(u1)
 
         return self.out(u1)
-
-
 def pick_device():
     """Выбрать устройство: CUDA, DirectML или CPU."""
     if torch.cuda.is_available():
@@ -227,8 +225,6 @@ def pick_device():
         return torch_directml.device()
     except Exception:
         return torch.device("cpu")
-
-
 def load_unet_model(model_path: str):
     """Загрузить веса модели и подготовить её к инференсу."""
     if not os.path.exists(model_path):
@@ -242,8 +238,6 @@ def load_unet_model(model_path: str):
         return model, device, f"U-Net загружен. Устройство: {device}"
     except Exception as e:
         return None, None, f"Ошибка загрузки U-Net: {e}"
-
-
 @torch.no_grad()  # здесь градиенты не нужны, мы только предсказываем
 def unet_predict_mask_255(model: nn.Module, device: torch.device, bgr: np.ndarray, roi_mask255: np.ndarray):
     """Прогнать одно изображение через U-Net и вернуть итоговую маску."""

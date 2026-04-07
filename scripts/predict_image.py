@@ -3,13 +3,9 @@ import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
 
-model = tf.keras.models.load_model(
-    r"C:\Users\user\Desktop\eye_opacity_detector\models\corneal_opacity_classifier.h5"
-)
-
+model = tf.keras.models.load_model(r"C:\Users\user\Desktop\eye_opacity_detector\models\corneal_opacity_classifier.h5")
 image_path = "C:\\Users\\user\\Desktop\\NPK\\eye_opacity_detector\\data\\test_eye1.jpg"
 img = cv2.imread(image_path)
-
 if img is None:
     raise ValueError("Не удалось загрузить изображение")
 
